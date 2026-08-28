@@ -1,17 +1,35 @@
-# Sequencing Evidence Validator (Note: Layer 4)
-Plan
+# Sequencing Evidence Validator
 
-done (local baseline version)
-- validator works
-- 15 tests pass
-- tested on GIAB HG002
+Three-layer framework for read-level trust in variant calls.
+> Raj (2026) — *End-to-End Sequencing Evidence Validation*
 
-todo
-- github - test base function and commit base code
-- add license
-- ref support
-- strand bias
-- genotype check
-- full chr20 run
-- paper
-- joss
+## Install
+
+```bash
+pip install -r requirements.txt
+```
+
+`samtools` must be on your `PATH`.
+
+## Usage
+
+```bash
+# Demo (no files needed)
+python validate.py --demo --plot
+
+# Real files
+python validate.py --fastq reads.fastq.gz --bam aln.bam --vcf calls.vcf.gz \
+                   --region chr20:1000000-1100000 --plot
+```
+
+## Layers
+
+| Layer | Input | Checks |
+|-------|-------|--------|
+| 1 | FASTQ | Base quality, read length, GC content, N-fraction |
+| 2 | BAM | Integrity, mapping rate, duplicate rate, MAPQ |
+| 3 | VCF + BAM | Depth, alt count, VAF, strand balance, genotype consistency |
+
+## Licence
+
+MIT
