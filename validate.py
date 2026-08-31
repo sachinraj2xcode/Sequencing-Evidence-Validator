@@ -36,12 +36,16 @@ def read_fastq(path):
 
 
 def layer1(fastq):
-    n = q_sum = q_total = 0
+    n = q_sum = q_total = len_sum = short = 0
 
     for seq, qual in read_fastq(fastq):
         n      += 1
+        slen    = len(seq)
         q_sum  += sum(ord(c) - 33 for c in qual)
         q_total += len(qual)
+        len_sum += slen
+        if slen < MIN_READ_LEN:
+            short += 1
 
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
@@ -51,6 +55,12 @@ def layer1(fastq):
     results.append(("MEAN_BASE_QUALITY",
                     "PASS" if mean_q >= MIN_MEAN_Q else "ERROR",
                     f"{mean_q:.1f} (min {MIN_MEAN_Q})"))
+
+    short_pct = short / n * 100
+    results.append(("READ_LENGTH",
+                    "WARN" if short_pct > 5 else "PASS",
+                    f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
+
     return results
 
 
@@ -179,7 +189,6 @@ if __name__ == "__main__":
     main()
 
 
-# FASTQ read length validation
 # FASTQ GC and N fraction validation
 # variant depth and allele count checks
 # genotype and strand validation
