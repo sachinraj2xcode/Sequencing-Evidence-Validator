@@ -63,3 +63,22 @@ def layer1(fastq):
     results.append(("READ_LENGTH",
                     "WARN" if short_pct > 5 else "PASS",
                     f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
+
+    mean_gc = gc_sum / n
+    results.append(("GC_CONTENT",
+                    "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
+                    f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"))
+
+    mean_n = n_sum / n
+    results.append(("N_FRACTION",
+                    "WARN" if mean_n > MAX_N_FRAC else "PASS",
+                    f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"))
+
+    return results
+
+
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
