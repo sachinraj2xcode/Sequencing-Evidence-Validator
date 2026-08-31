@@ -36,37 +36,21 @@ def read_fastq(path):
 
 
 def layer1(fastq):
-    n = q_sum = q_total = len_sum = short = 0
-    gc_sum = n_sum = 0.0
+    n = q_sum = q_total = 0
+
     for seq, qual in read_fastq(fastq):
         n      += 1
-        slen    = len(seq)
         q_sum  += sum(ord(c) - 33 for c in qual)
         q_total += len(qual)
-        len_sum += slen
-        if slen < MIN_READ_LEN:
-            short += 1
-        gc_sum += (seq.count("G") + seq.count("C")) / max(1, slen)
-        n_sum  += seq.count("N") / max(1, slen)
+
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
+
     results = []
     mean_q = q_sum / q_total
     results.append(("MEAN_BASE_QUALITY",
                     "PASS" if mean_q >= MIN_MEAN_Q else "ERROR",
                     f"{mean_q:.1f} (min {MIN_MEAN_Q})"))
-    short_pct = short / n * 100
-    results.append(("READ_LENGTH",
-                    "WARN" if short_pct > 5 else "PASS",
-                    f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
-    mean_gc = gc_sum / n
-    results.append(("GC_CONTENT",
-                    "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
-                    f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"))
-    mean_n = n_sum / n
-    results.append(("N_FRACTION",
-                    "WARN" if mean_n > MAX_N_FRAC else "PASS",
-                    f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"))
     return results
 
 
@@ -173,6 +157,30 @@ def get_pileup(bam, chrom, pos):
     return reads
 
 
+def main():
+    p = argparse.ArgumentParser(description="Sequencing Evidence Validator")
+    p.add_argument("--no-color", action="store_true")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s1 = sub.add_parser("fastq")
+    s1.add_argument("fastq", metavar="FASTQ")
+
+    args = p.parse_args()
+
+    if args.cmd == "fastq":
+        if not os.path.exists(args.fastq):
+            print(f"file not found: {args.fastq}", file=sys.stderr)
+            sys.exit(1)
+        for name, verdict, msg in layer1(args.fastq):
+            print(f"  [{verdict}]  {name:<24}  {msg}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+# FASTQ read length validation
+# FASTQ GC and N fraction validation
 # variant depth and allele count checks
 # genotype and strand validation
 # VCF layer validation
