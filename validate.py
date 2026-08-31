@@ -77,7 +77,16 @@ def run(cmd):
         return ""
 
 
-# BAM integrity validation
+def layer2(bam):
+    results = []
+
+    rc = subprocess.call(["samtools", "quickcheck", bam],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    results.append(("BAM_INTEGRITY",
+                    "PASS" if rc == 0 else "ERROR",
+                    "ok" if rc == 0 else "failed quickcheck"))
+
+
 # BAM mapping and duplicate metrics
 # BAM mapping quality validation
 # VCF reader
