@@ -38,7 +38,6 @@ def read_fastq(path):
 def layer1(fastq):
     n = q_sum = q_total = len_sum = short = 0
     gc_sum = n_sum = 0.0
-
     for seq, qual in read_fastq(fastq):
         n += 1
         slen = len(seq)
@@ -49,31 +48,25 @@ def layer1(fastq):
             short += 1
         gc_sum += (seq.count("G") + seq.count("C")) / max(1, slen)
         n_sum += seq.count("N") / max(1, slen)
-
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
-
     results = []
     mean_q = q_sum / q_total
     results.append(("MEAN_BASE_QUALITY",
                     "PASS" if mean_q >= MIN_MEAN_Q else "ERROR",
                     f"{mean_q:.1f} (min {MIN_MEAN_Q})"))
-
     short_pct = short / n * 100
     results.append(("READ_LENGTH",
                     "WARN" if short_pct > 5 else "PASS",
                     f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
-
     mean_gc = gc_sum / n
     results.append(("GC_CONTENT",
                     "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
                     f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"))
-
     mean_n = n_sum / n
     results.append(("N_FRACTION",
                     "WARN" if mean_n > MAX_N_FRAC else "PASS",
                     f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"))
-
     return results
 
 
@@ -82,3 +75,18 @@ def run(cmd):
         return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
+
+
+# BAM integrity validation
+# BAM mapping and duplicate metrics
+# BAM mapping quality validation
+# VCF reader
+# BAM pileup reader
+# variant depth and allele count checks
+# genotype and strand validation
+# VCF layer validation
+# terminal verdict formatting
+# validation result reporting
+# variant results graph
+# command handlers and argument parsing
+# validator CLI execution flow
