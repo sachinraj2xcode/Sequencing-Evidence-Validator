@@ -37,6 +37,7 @@ def read_fastq(path):
 
 def layer1(fastq):
     n = q_sum = q_total = len_sum = short = 0
+    gc_sum = n_sum = 0.0
 
     for seq, qual in read_fastq(fastq):
         n      += 1
@@ -46,6 +47,8 @@ def layer1(fastq):
         len_sum += slen
         if slen < MIN_READ_LEN:
             short += 1
+        gc_sum += (seq.count("G") + seq.count("C")) / max(1, slen)
+        n_sum  += seq.count("N") / max(1, slen)
 
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
@@ -60,6 +63,16 @@ def layer1(fastq):
     results.append(("READ_LENGTH",
                     "WARN" if short_pct > 5 else "PASS",
                     f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
+
+    mean_gc = gc_sum / n
+    results.append(("GC_CONTENT",
+                    "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
+                    f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"))
+
+    mean_n = n_sum / n
+    results.append(("N_FRACTION",
+                    "WARN" if mean_n > MAX_N_FRAC else "PASS",
+                    f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"))
 
     return results
 
@@ -189,7 +202,6 @@ if __name__ == "__main__":
     main()
 
 
-# FASTQ GC and N fraction validation
 # variant depth and allele count checks
 # genotype and strand validation
 # VCF layer validation
