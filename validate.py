@@ -5,22 +5,22 @@ import subprocess
 import sys
 from collections import Counter
 
-MIN_MEAN_Q = 20.0
-MAX_N_FRAC = 0.05
-MIN_READ_LEN = 50
-MIN_GC = 0.20
-MAX_GC = 0.80
+MIN_MEAN_Q       = 20.0
+MAX_N_FRAC       = 0.05
+MIN_READ_LEN     = 50
+MIN_GC           = 0.20
+MAX_GC           = 0.80
 MIN_MAPPING_RATE = 0.90
-MIN_MEAN_MAPQ = 30.0
-MAX_DUP_RATE = 0.20
-MIN_DEPTH = 8
-MIN_ALT_COUNT = 2
-MIN_VAF = 0.05
-MIN_BQ = 20
-MIN_MAPQ = 20
-HOM_VAF_MIN = 0.85
-HET_VAF_MIN = 0.25
-HET_VAF_MAX = 0.75
+MIN_MEAN_MAPQ    = 30.0
+MAX_DUP_RATE     = 0.20
+MIN_DEPTH        = 8
+MIN_ALT_COUNT    = 2
+MIN_VAF          = 0.05
+MIN_BQ           = 20
+MIN_MAPQ         = 20
+HOM_VAF_MIN      = 0.85
+HET_VAF_MIN      = 0.25
+HET_VAF_MAX      = 0.75
 
 
 def read_fastq(path):
@@ -29,7 +29,7 @@ def read_fastq(path):
         while True:
             if not fh.readline():
                 break
-            seq = fh.readline().rstrip()
+            seq  = fh.readline().rstrip()
             fh.readline()
             qual = fh.readline().rstrip()
             yield seq, qual
@@ -40,15 +40,15 @@ def layer1(fastq):
     gc_sum = n_sum = 0.0
 
     for seq, qual in read_fastq(fastq):
-        n += 1
-        slen = len(seq)
-        q_sum += sum(ord(c) - 33 for c in qual)
+        n      += 1
+        slen    = len(seq)
+        q_sum  += sum(ord(c) - 33 for c in qual)
         q_total += len(qual)
         len_sum += slen
         if slen < MIN_READ_LEN:
             short += 1
         gc_sum += (seq.count("G") + seq.count("C")) / max(1, slen)
-        n_sum += seq.count("N") / max(1, slen)
+        n_sum  += seq.count("N") / max(1, slen)
 
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
@@ -96,12 +96,9 @@ def layer2(bam):
     flagstat = run(["samtools", "flagstat", bam])
     total = mapped = dups = 0
     for line in flagstat.splitlines():
-        if "in total" in line:
-            total = int(line.split()[0])
-        if "mapped (" in line:
-            mapped = int(line.split()[0])
-        if "duplicates" in line:
-            dups = int(line.split()[0])
+        if "in total"   in line: total  = int(line.split()[0])
+        if "mapped ("   in line: mapped = int(line.split()[0])
+        if "duplicates" in line: dups   = int(line.split()[0])
 
     if total == 0:
         results.append(("BAM_READS", "ERROR", "no reads"))
@@ -122,10 +119,8 @@ def layer2(bam):
     for line in mapq_out.splitlines():
         parts = line.split("\t")
         if len(parts) > 4:
-            try:
-                mapqs.append(int(parts[4]))
-            except ValueError:
-                pass
+            try: mapqs.append(int(parts[4]))
+            except ValueError: pass
     if mapqs:
         mean_mq = sum(mapqs) / len(mapqs)
         results.append(("MEAN_MAPQ",
@@ -145,9 +140,9 @@ def read_vcf(path):
             if len(f) < 10:
                 continue
             chrom, pos, ref, alt = f[0], int(f[1]), f[3], f[4].split(",")[0]
-            fmt = f[8].split(":")
+            fmt    = f[8].split(":")
             sample = f[9].split(":")
-            gt = dict(zip(fmt, sample)).get("GT", "./.").replace("|", "/")
+            gt     = dict(zip(fmt, sample)).get("GT", "./.").replace("|", "/")
             yield chrom, pos, ref, alt, gt
 
 
@@ -157,13 +152,13 @@ def get_pileup(bam, chrom, pos):
         reads = []
         with pysam.AlignmentFile(bam, "rb") as bf:
             for col in bf.pileup(chrom, pos - 1, pos, truncate=True,
-                                 min_base_quality=0, min_mapping_quality=0):
+                                  min_base_quality=0, min_mapping_quality=0):
                 for pr in col.pileups:
                     if pr.is_del or pr.is_refskip:
                         continue
-                    r = pr.alignment
-                    bq = r.query_qualities[pr.query_position] if r.query_qualities else 0
-                    mq = r.mapping_quality or 0
+                    r    = pr.alignment
+                    bq   = r.query_qualities[pr.query_position] if r.query_qualities else 0
+                    mq   = r.mapping_quality or 0
                     base = r.query_sequence[pr.query_position].upper()
                     reads.append((base, bq, mq, not r.is_reverse))
         return reads
@@ -178,14 +173,55 @@ def get_pileup(bam, chrom, pos):
         if len(parts) < 6:
             continue
         for b, q in zip(parts[4].upper(), parts[5]):
-            if b in ".,":
-                base = "REF"
-            elif b in "ACGT":
-                base = b
-            else:
-                continue
+            if b in ".,":     base = "REF"
+            elif b in "ACGT": base = b
+            else:             continue
             reads.append((base, ord(q) - 33, 30, b == b.upper()))
     return reads
+
+
+def check_variant(chrom, pos, ref, alt, gt, reads):
+    hq    = [(b, bq, mq, fwd) for b, bq, mq, fwd in reads
+             if bq >= MIN_BQ and mq >= MIN_MAPQ]
+    depth = len(hq)
+    alts  = [r for r in hq if r[0] == alt[0]]
+    refs  = [r for r in hq if r[0] == ref[0]]
+    n_alt = len(alts)
+    vaf   = n_alt / depth if depth > 0 else 0.0
+
+    checks = []
+
+    if depth < MIN_DEPTH:
+        return [("DEPTH", "ERROR", f"{depth} reads (min {MIN_DEPTH})")]
+    checks.append(("DEPTH", "PASS", str(depth)))
+
+    if n_alt < MIN_ALT_COUNT:
+        return checks + [("ALT_COUNT", "ERROR", f"{n_alt} alt reads (min {MIN_ALT_COUNT})")]
+    checks.append(("ALT_COUNT", "PASS", str(n_alt)))
+
+    if vaf < MIN_VAF:
+        return checks + [("VAF", "ERROR", f"{vaf:.3f} (min {MIN_VAF})")]
+    checks.append(("VAF", "PASS", f"{vaf:.3f}"))
+
+    if gt in ("0/1", "1/0") and len(refs) == 0:
+        checks.append(("REF_SUPPORT", "WARN", "no ref reads for het call"))
+
+    fwd = sum(1 for r in alts if r[3])
+    rev = n_alt - fwd
+    checks.append(("STRAND_BALANCE",
+                   "PASS" if fwd > 0 and rev > 0 else "WARN",
+                   f"{fwd} fwd / {rev} rev"))
+
+    if gt in ("1/1", "1|1"):
+        ok = vaf >= HOM_VAF_MIN
+        checks.append(("GENOTYPE", "PASS" if ok else "WARN",
+                       f"hom-alt vaf {vaf:.3f} (min {HOM_VAF_MIN})"))
+    elif gt in ("0/1", "0|1", "1/0", "1|0"):
+        ok = HET_VAF_MIN <= vaf <= HET_VAF_MAX
+        checks.append(("GENOTYPE", "PASS" if ok else "WARN",
+                       f"het vaf {vaf:.3f} (expected {HET_VAF_MIN}–{HET_VAF_MAX})"))
+
+    return checks
 
 
 def main():
@@ -210,8 +246,6 @@ if __name__ == "__main__":
     main()
 
 
-# variant depth and allele count checks
-# genotype and strand validation
 # VCF layer validation
 # terminal verdict formatting
 # validation result reporting
