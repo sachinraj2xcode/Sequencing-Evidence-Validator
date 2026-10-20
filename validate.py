@@ -317,6 +317,104 @@ def print_summary(l1, l2, variants, use_colour):
     print(f"\n  overall  {colourise(overall, overall, use_colour)}\n")
 
 
+# ── graph ─────────────────────────────────────────────────────────────────
+
+def make_graph(variants, out_path):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import numpy as np
+    except ImportError:
+        print("matplotlib/numpy not installed — skipping graph")
+        return
+
+    verdicts = [v[5] for v in variants]
+    counts   = Counter(verdicts)
+    total    = len(verdicts)
+    colors   = ["#2ecc71", "#f39c12", "#e74c3c"]
+    labels   = ["PASS", "WARN", "ERROR"]
+
+    is_indel = [len(v[2]) != len(v[3]) for v in variants]
+    snv_c    = Counter(v[5] for v, ind in zip(variants, is_indel) if not ind)
+    ind_c    = Counter(v[5] for v, ind in zip(variants, is_indel) if ind)
+
+    fail_reasons = Counter()
+    vafs = {"PASS": [], "WARN": [], "ERROR": []}
+    for _, _, _, _, _, verdict, checks in variants:
+        if verdict != "PASS" and checks:
+            fail_reasons[checks[-1][0]] += 1
+        for name, _, msg in checks:
+            if name == "VAF":
+                try: vafs[verdict].append(float(msg.split()[0]))
+                except (ValueError, IndexError): pass
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9), facecolor="#f8f9fa")
+    fig.suptitle("Sequencing Evidence Validator — Layer 3 Results",
+                 fontsize=12, fontweight="bold")
+
+    def style(ax, title):
+        ax.set_facecolor("#f8f9fa")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_title(title, fontsize=10, fontweight="bold", pad=6)
+        ax.yaxis.grid(True, color="#dee2e6", linewidth=0.6, zorder=0)
+        ax.set_axisbelow(True)
+
+    style(axes[0, 0], "Overall verdict")
+    vals = [counts.get(l, 0) for l in labels]
+    bars = axes[0, 0].bar(labels, vals, color=colors, edgecolor="#495057", linewidth=0.7, zorder=3)
+    for bar, cnt in zip(bars, vals):
+        axes[0, 0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                        f"{cnt}\n{cnt/total*100:.1f}%", ha="center", va="bottom", fontsize=9)
+    axes[0, 0].set_ylim(0, total * 1.18)
+
+    style(axes[0, 1], "SNV vs Indel")
+    x, w = np.arange(3), 0.33
+    axes[0, 1].bar(x - w/2, [snv_c.get(l, 0) for l in labels], w,
+                   color=colors, edgecolor="#495057", linewidth=0.7, zorder=3)
+    axes[0, 1].bar(x + w/2, [ind_c.get(l, 0) for l in labels], w,
+                   color=colors, edgecolor="#495057", linewidth=0.7, hatch="///", alpha=0.8, zorder=3)
+    axes[0, 1].set_xticks(x)
+    axes[0, 1].set_xticklabels(labels)
+    axes[0, 1].legend(handles=[
+        mpatches.Patch(facecolor="white", edgecolor="#495057", label="SNV"),
+        mpatches.Patch(facecolor="white", edgecolor="#495057", hatch="///", label="Indel"),
+    ], fontsize=8, frameon=False)
+
+    style(axes[1, 0], "Fail reasons")
+    axes[1, 0].yaxis.grid(False)
+    axes[1, 0].xaxis.grid(True, color="#dee2e6", linewidth=0.6, zorder=0)
+    if fail_reasons:
+        items = sorted(fail_reasons.items(), key=lambda x: x[1])
+        hbars = axes[1, 0].barh([i[0] for i in items], [i[1] for i in items],
+                                 color="#f39c12", edgecolor="#495057", linewidth=0.7, zorder=3)
+        for bar, cnt in zip(hbars, [i[1] for i in items]):
+            axes[1, 0].text(cnt + 0.1, bar.get_y() + bar.get_height() / 2,
+                            str(cnt), va="center", fontsize=9)
+        axes[1, 0].set_xlim(0, max(i[1] for i in items) * 1.3)
+    else:
+        axes[1, 0].text(0.5, 0.5, "no failures", ha="center", va="center",
+                        transform=axes[1, 0].transAxes)
+
+    style(axes[1, 1], "VAF distribution")
+    axes[1, 1].yaxis.grid(False)
+    bins = np.linspace(0, 1, 21)
+    for key, color in zip(labels, colors):
+        if vafs.get(key):
+            axes[1, 1].hist(vafs[key], bins=bins, color=color, alpha=0.7,
+                            edgecolor="#495057", linewidth=0.4,
+                            label=f"{key} (n={len(vafs[key])})", zorder=3)
+    axes[1, 1].axvline(MIN_VAF,     ls="--", lw=1, color="#6c757d", label=f"min VAF {MIN_VAF}")
+    axes[1, 1].axvline(HOM_VAF_MIN, ls=":",  lw=1, color="#343a40", label=f"hom-alt {HOM_VAF_MIN}")
+    axes[1, 1].set_xlabel("VAF")
+    axes[1, 1].legend(fontsize=7.5, frameon=False)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="#f8f9fa")
+    print(f"graph saved → {out_path}")
+
+
 # ── command handlers ──────────────────────────────────────────────────────
 
 def cmd_fastq(args):
@@ -355,6 +453,7 @@ def cmd_all(args):
     print_layer("vcf", [("VARIANTS", verdict, f"{passed}/{len(variants)} pass")], not args.no_color)
     print_variants(variants, args.verbose, not args.no_color)
     print_summary(l1, l2, variants, not args.no_color)
+    make_graph(variants, args.plot_out)
 
 
 # ── entry point ───────────────────────────────────────────────────────────
@@ -390,6 +489,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# variant results graph
