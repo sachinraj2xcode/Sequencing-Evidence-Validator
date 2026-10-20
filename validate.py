@@ -243,6 +243,43 @@ def layer3(vcf, bam, region=None):
     return variants
 
 
+GREEN  = "\033[32m"
+YELLOW = "\033[33m"
+RED    = "\033[31m"
+RESET  = "\033[0m"
+
+def colourise(verdict, text, use_colour):
+    if not use_colour:
+        return text
+    c = {"PASS": GREEN, "WARN": YELLOW, "ERROR": RED}.get(verdict, "")
+    return f"{c}{text}{RESET}"
+
+def sym(verdict):
+    return {"PASS": "✓", "WARN": "⚠", "ERROR": "✗"}.get(verdict, "?")
+
+def print_layer(title, results, use_colour):
+    print(f"\n  {title}")
+    print(f"  {'─'*60}")
+    for name, verdict, msg in results:
+        tag = colourise(verdict, f"{sym(verdict)} {verdict:<7}", use_colour)
+        print(f"  [{tag}]  {name:<24}  {msg}")
+
+def print_variants(variants, verbose, use_colour):
+    non_pass = [v for v in variants if v[5] != "PASS"]
+    if verbose:
+        print(f"\n  {'CHROM':<8} {'POS':>10}  {'REF':<5} {'ALT':<5} {'GT':<6}  VERDICT")
+        print(f"  {'─'*60}")
+        for chrom, pos, ref, alt, gt, verdict, checks in variants:
+            tag = colourise(verdict, f"{sym(verdict)} {verdict}", use_colour)
+            print(f"  {chrom:<8} {pos:>10}  {ref:<5} {alt:<5} {gt:<6}  {tag}")
+    elif non_pass:
+        print(f"\n  variants with warnings / errors:")
+        for chrom, pos, ref, alt, gt, verdict, checks in non_pass:
+            tag  = colourise(verdict, f"{sym(verdict)} {verdict}", use_colour)
+            note = checks[-1][0] if checks else ""
+            print(f"  {tag:<20}  {chrom}:{pos}  {ref}>{alt}  {gt}  [{note}]")
+
+
 def main():
     p = argparse.ArgumentParser(description="Sequencing Evidence Validator")
     p.add_argument("--no-color", action="store_true")
@@ -258,14 +295,14 @@ def main():
             print(f"file not found: {args.fastq}", file=sys.stderr)
             sys.exit(1)
         for name, verdict, msg in layer1(args.fastq):
-            print(f"  [{verdict}]  {name:<24}  {msg}")
+            tag = colourise(verdict, f"{sym(verdict)} {verdict:<7}", not args.no_color)
+            print(f"  [{tag}]  {name:<24}  {msg}")
 
 
 if __name__ == "__main__":
     main()
 
 
-# terminal verdict formatting
 # validation result reporting
 # command handlers and argument parsing
 # validator CLI execution flow
