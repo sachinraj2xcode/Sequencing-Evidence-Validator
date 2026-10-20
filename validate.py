@@ -280,6 +280,28 @@ def print_variants(variants, verbose, use_colour):
             print(f"  {tag:<20}  {chrom}:{pos}  {ref}>{alt}  {gt}  [{note}]")
 
 
+def lv(results):
+    vs = [r[1] for r in results]
+    return "ERROR" if "ERROR" in vs else "WARN" if "WARN" in vs else "PASS"
+
+
+def print_summary(l1, l2, variants, use_colour):
+    total   = len(variants)
+    passed  = sum(1 for v in variants if v[5] == "PASS")
+    warned  = sum(1 for v in variants if v[5] == "WARN")
+    errored = sum(1 for v in variants if v[5] == "ERROR")
+    lv3     = "ERROR" if errored else "WARN" if warned else "PASS"
+    all_lv  = ([lv(l1)] if l1 else []) + ([lv(l2)] if l2 else []) + ([lv3] if variants else [])
+    overall = "ERROR" if "ERROR" in all_lv else "WARN" if "WARN" in all_lv else "PASS"
+
+    print(f"\n  {'─'*60}")
+    if l1:       print(f"  layer 1  {colourise(lv(l1), lv(l1), use_colour)}")
+    if l2:       print(f"  layer 2  {colourise(lv(l2), lv(l2), use_colour)}")
+    if variants: print(f"  layer 3  {colourise(lv3, lv3, use_colour)}  "
+                       f"({passed}/{total} pass, {warned} warn, {errored} error)")
+    print(f"\n  overall  {colourise(overall, overall, use_colour)}\n")
+
+
 def main():
     p = argparse.ArgumentParser(description="Sequencing Evidence Validator")
     p.add_argument("--no-color", action="store_true")
@@ -294,16 +316,15 @@ def main():
         if not os.path.exists(args.fastq):
             print(f"file not found: {args.fastq}", file=sys.stderr)
             sys.exit(1)
-        for name, verdict, msg in layer1(args.fastq):
-            tag = colourise(verdict, f"{sym(verdict)} {verdict:<7}", not args.no_color)
-            print(f"  [{tag}]  {name:<24}  {msg}")
+        l1 = layer1(args.fastq)
+        print_layer("fastq", l1, not args.no_color)
+        print_summary(l1, [], [], not args.no_color)
 
 
 if __name__ == "__main__":
     main()
 
 
-# validation result reporting
 # command handlers and argument parsing
 # validator CLI execution flow
 # variant results graph
