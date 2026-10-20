@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections import Counter
 
+# thresholds
 MIN_MEAN_Q       = 20.0
 MAX_N_FRAC       = 0.05
 MIN_READ_LEN     = 50
@@ -22,6 +23,38 @@ HOM_VAF_MIN      = 0.85
 HET_VAF_MIN      = 0.25
 HET_VAF_MAX      = 0.75
 
+# colours
+GREEN  = "\033[32m"
+YELLOW = "\033[33m"
+RED    = "\033[31m"
+RESET  = "\033[0m"
+
+
+# ── helpers ───────────────────────────────────────────────────────────────
+
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+def colourise(verdict, text, use_colour):
+    if not use_colour:
+        return text
+    return {"PASS": GREEN, "WARN": YELLOW, "ERROR": RED}.get(verdict, "") + text + RESET
+
+
+def sym(verdict):
+    return {"PASS": "✓", "WARN": "⚠", "ERROR": "✗"}.get(verdict, "?")
+
+
+def verdict_of(checks):
+    vs = [c[1] for c in checks]
+    return "ERROR" if "ERROR" in vs else "WARN" if "WARN" in vs else "PASS"
+
+
+# ── readers ───────────────────────────────────────────────────────────────
 
 def read_fastq(path):
     opener = gzip.open if path.endswith(".gz") else open
@@ -35,14 +68,72 @@ def read_fastq(path):
             yield seq, qual
 
 
+def read_vcf(path):
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.rstrip().split("\t")
+            if len(f) < 10:
+                continue
+            chrom = f[0]
+            pos   = int(f[1])
+            ref   = f[3]
+            alt   = f[4].split(",")[0]
+            fmt   = f[8].split(":")
+            samp  = f[9].split(":")
+            gt    = dict(zip(fmt, samp)).get("GT", "./.").replace("|", "/")
+            yield chrom, pos, ref, alt, gt
+
+
+def get_pileup(bam, chrom, pos):
+    try:
+        import pysam
+        reads = []
+        with pysam.AlignmentFile(bam, "rb") as bf:
+            for col in bf.pileup(chrom, pos - 1, pos, truncate=True,
+                                 min_base_quality=0, min_mapping_quality=0):
+                for pr in col.pileups:
+                    if pr.is_del or pr.is_refskip:
+                        continue
+                    r    = pr.alignment
+                    bq   = r.query_qualities[pr.query_position] if r.query_qualities else 0
+                    mq   = r.mapping_quality or 0
+                    base = r.query_sequence[pr.query_position].upper()
+                    reads.append((base, bq, mq, not r.is_reverse))
+        return reads
+    except ImportError:
+        pass
+
+    out = run(["samtools", "mpileup", "-r", f"{chrom}:{pos}-{pos}",
+               "-Q", str(MIN_BQ), "-q", str(MIN_MAPQ), bam])
+    reads = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 6:
+            continue
+        for b, q in zip(parts[4].upper(), parts[5]):
+            if b in ".,":
+                base = "REF"
+            elif b in "ACGT":
+                base = b
+            else:
+                continue
+            reads.append((base, ord(q) - 33, 30, b == b.upper()))
+    return reads
+
+
+# ── layers ────────────────────────────────────────────────────────────────
+
 def layer1(fastq):
     n = q_sum = q_total = len_sum = short = 0
     gc_sum = n_sum = 0.0
 
     for seq, qual in read_fastq(fastq):
-        n      += 1
-        slen    = len(seq)
-        q_sum  += sum(ord(c) - 33 for c in qual)
+        n       += 1
+        slen     = len(seq)
+        q_sum   += sum(ord(c) - 33 for c in qual)
         q_total += len(qual)
         len_sum += slen
         if slen < MIN_READ_LEN:
@@ -53,35 +144,21 @@ def layer1(fastq):
     if n == 0:
         return [("FASTQ_EMPTY", "ERROR", "no reads found")]
 
-    results = []
-    mean_q = q_sum / q_total
-    results.append(("MEAN_BASE_QUALITY",
-                    "PASS" if mean_q >= MIN_MEAN_Q else "ERROR",
-                    f"{mean_q:.1f} (min {MIN_MEAN_Q})"))
-
+    mean_q    = q_sum / q_total
     short_pct = short / n * 100
-    results.append(("READ_LENGTH",
-                    "WARN" if short_pct > 5 else "PASS",
-                    f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"))
+    mean_gc   = gc_sum / n
+    mean_n    = n_sum / n
 
-    mean_gc = gc_sum / n
-    results.append(("GC_CONTENT",
-                    "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
-                    f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"))
-
-    mean_n = n_sum / n
-    results.append(("N_FRACTION",
-                    "WARN" if mean_n > MAX_N_FRAC else "PASS",
-                    f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"))
-
-    return results
-
-
-def run(cmd):
-    try:
-        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return ""
+    return [
+        ("MEAN_BASE_QUALITY", "PASS" if mean_q >= MIN_MEAN_Q else "ERROR",
+         f"{mean_q:.1f} (min {MIN_MEAN_Q})"),
+        ("READ_LENGTH", "WARN" if short_pct > 5 else "PASS",
+         f"mean {len_sum/n:.0f} bp, {short_pct:.1f}% < {MIN_READ_LEN} bp"),
+        ("GC_CONTENT", "WARN" if mean_gc < MIN_GC or mean_gc > MAX_GC else "PASS",
+         f"{mean_gc*100:.1f}% (expected {MIN_GC*100:.0f}–{MAX_GC*100:.0f}%)"),
+        ("N_FRACTION", "WARN" if mean_n > MAX_N_FRAC else "PASS",
+         f"{mean_n*100:.2f}% (max {MAX_N_FRAC*100:.0f}%)"),
+    ]
 
 
 def layer2(bam):
@@ -105,18 +182,16 @@ def layer2(bam):
         return results
 
     mr = mapped / total
+    dr = dups / total
     results.append(("MAPPING_RATE",
                     "PASS" if mr >= MIN_MAPPING_RATE else "ERROR",
                     f"{mr*100:.2f}% (min {MIN_MAPPING_RATE*100:.0f}%)"))
-
-    dr = dups / total
     results.append(("DUPLICATE_RATE",
                     "PASS" if dr <= MAX_DUP_RATE else "WARN",
                     f"{dr*100:.2f}% (max {MAX_DUP_RATE*100:.0f}%)"))
 
-    mapq_out = run(["samtools", "view", "-s", "0.01", bam])
     mapqs = []
-    for line in mapq_out.splitlines():
+    for line in run(["samtools", "view", "-s", "0.01", bam]).splitlines():
         parts = line.split("\t")
         if len(parts) > 4:
             try: mapqs.append(int(parts[4]))
@@ -130,80 +205,30 @@ def layer2(bam):
     return results
 
 
-def read_vcf(path):
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt") as fh:
-        for line in fh:
-            if line.startswith("#"):
-                continue
-            f = line.rstrip().split("\t")
-            if len(f) < 10:
-                continue
-            chrom, pos, ref, alt = f[0], int(f[1]), f[3], f[4].split(",")[0]
-            fmt    = f[8].split(":")
-            sample = f[9].split(":")
-            gt     = dict(zip(fmt, sample)).get("GT", "./.").replace("|", "/")
-            yield chrom, pos, ref, alt, gt
-
-
-def get_pileup(bam, chrom, pos):
-    try:
-        import pysam
-        reads = []
-        with pysam.AlignmentFile(bam, "rb") as bf:
-            for col in bf.pileup(chrom, pos - 1, pos, truncate=True,
-                                  min_base_quality=0, min_mapping_quality=0):
-                for pr in col.pileups:
-                    if pr.is_del or pr.is_refskip:
-                        continue
-                    r    = pr.alignment
-                    bq   = r.query_qualities[pr.query_position] if r.query_qualities else 0
-                    mq   = r.mapping_quality or 0
-                    base = r.query_sequence[pr.query_position].upper()
-                    reads.append((base, bq, mq, not r.is_reverse))
-        return reads
-    except ImportError:
-        pass
-
-    out = run(["samtools", "mpileup", "-r", f"{chrom}:{pos}-{pos}",
-               "-Q", str(MIN_BQ), "-q", str(MIN_MAPQ), bam])
-    reads = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 6:
-            continue
-        for b, q in zip(parts[4].upper(), parts[5]):
-            if b in ".,":     base = "REF"
-            elif b in "ACGT": base = b
-            else:             continue
-            reads.append((base, ord(q) - 33, 30, b == b.upper()))
-    return reads
-
-
 def check_variant(chrom, pos, ref, alt, gt, reads):
-    hq    = [(b, bq, mq, fwd) for b, bq, mq, fwd in reads
-             if bq >= MIN_BQ and mq >= MIN_MAPQ]
+    hq    = [r for r in reads if r[1] >= MIN_BQ and r[2] >= MIN_MAPQ]
     depth = len(hq)
     alts  = [r for r in hq if r[0] == alt[0]]
     refs  = [r for r in hq if r[0] == ref[0]]
     n_alt = len(alts)
     vaf   = n_alt / depth if depth > 0 else 0.0
 
-    checks = []
-
     if depth < MIN_DEPTH:
         return [("DEPTH", "ERROR", f"{depth} reads (min {MIN_DEPTH})")]
-    checks.append(("DEPTH", "PASS", str(depth)))
-
     if n_alt < MIN_ALT_COUNT:
-        return checks + [("ALT_COUNT", "ERROR", f"{n_alt} alt reads (min {MIN_ALT_COUNT})")]
-    checks.append(("ALT_COUNT", "PASS", str(n_alt)))
-
+        return [("DEPTH", "PASS", str(depth)),
+                ("ALT_COUNT", "ERROR", f"{n_alt} alt reads (min {MIN_ALT_COUNT})")]
     if vaf < MIN_VAF:
-        return checks + [("VAF", "ERROR", f"{vaf:.3f} (min {MIN_VAF})")]
-    checks.append(("VAF", "PASS", f"{vaf:.3f}"))
+        return [("DEPTH", "PASS", str(depth)), ("ALT_COUNT", "PASS", str(n_alt)),
+                ("VAF", "ERROR", f"{vaf:.3f} (min {MIN_VAF})")]
 
-    if gt in ("0/1", "1/0") and len(refs) == 0:
+    checks = [
+        ("DEPTH",    "PASS", str(depth)),
+        ("ALT_COUNT","PASS", str(n_alt)),
+        ("VAF",      "PASS", f"{vaf:.3f}"),
+    ]
+
+    if gt in ("0/1", "1/0") and not refs:
         checks.append(("REF_SUPPORT", "WARN", "no ref reads for het call"))
 
     fwd = sum(1 for r in alts if r[3])
@@ -213,12 +238,12 @@ def check_variant(chrom, pos, ref, alt, gt, reads):
                    f"{fwd} fwd / {rev} rev"))
 
     if gt in ("1/1", "1|1"):
-        ok = vaf >= HOM_VAF_MIN
-        checks.append(("GENOTYPE", "PASS" if ok else "WARN",
+        checks.append(("GENOTYPE",
+                       "PASS" if vaf >= HOM_VAF_MIN else "WARN",
                        f"hom-alt vaf {vaf:.3f} (min {HOM_VAF_MIN})"))
     elif gt in ("0/1", "0|1", "1/0", "1|0"):
-        ok = HET_VAF_MIN <= vaf <= HET_VAF_MAX
-        checks.append(("GENOTYPE", "PASS" if ok else "WARN",
+        checks.append(("GENOTYPE",
+                       "PASS" if HET_VAF_MIN <= vaf <= HET_VAF_MAX else "WARN",
                        f"het vaf {vaf:.3f} (expected {HET_VAF_MIN}–{HET_VAF_MAX})"))
 
     return checks
@@ -235,27 +260,12 @@ def layer3(vcf, bam, region=None):
                 s, e = map(int, coords.split("-"))
                 if not (s <= pos <= e):
                     continue
-        reads   = get_pileup(bam, chrom, pos)
-        checks  = check_variant(chrom, pos, ref, alt, gt, reads)
-        verdict = ("ERROR" if any(c[1] == "ERROR" for c in checks) else
-                   "WARN"  if any(c[1] == "WARN"  for c in checks) else "PASS")
-        variants.append((chrom, pos, ref, alt, gt, verdict, checks))
+        checks  = check_variant(chrom, pos, ref, alt, gt, get_pileup(bam, chrom, pos))
+        variants.append((chrom, pos, ref, alt, gt, verdict_of(checks), checks))
     return variants
 
 
-GREEN  = "\033[32m"
-YELLOW = "\033[33m"
-RED    = "\033[31m"
-RESET  = "\033[0m"
-
-def colourise(verdict, text, use_colour):
-    if not use_colour:
-        return text
-    c = {"PASS": GREEN, "WARN": YELLOW, "ERROR": RED}.get(verdict, "")
-    return f"{c}{text}{RESET}"
-
-def sym(verdict):
-    return {"PASS": "✓", "WARN": "⚠", "ERROR": "✗"}.get(verdict, "?")
+# ── display ───────────────────────────────────────────────────────────────
 
 def print_layer(title, results, use_colour):
     print(f"\n  {title}")
@@ -264,25 +274,21 @@ def print_layer(title, results, use_colour):
         tag = colourise(verdict, f"{sym(verdict)} {verdict:<7}", use_colour)
         print(f"  [{tag}]  {name:<24}  {msg}")
 
+
 def print_variants(variants, verbose, use_colour):
     non_pass = [v for v in variants if v[5] != "PASS"]
     if verbose:
         print(f"\n  {'CHROM':<8} {'POS':>10}  {'REF':<5} {'ALT':<5} {'GT':<6}  VERDICT")
         print(f"  {'─'*60}")
-        for chrom, pos, ref, alt, gt, verdict, checks in variants:
+        for chrom, pos, ref, alt, gt, verdict, _ in variants:
             tag = colourise(verdict, f"{sym(verdict)} {verdict}", use_colour)
             print(f"  {chrom:<8} {pos:>10}  {ref:<5} {alt:<5} {gt:<6}  {tag}")
     elif non_pass:
-        print(f"\n  variants with warnings / errors:")
+        print("\n  variants with warnings / errors:")
         for chrom, pos, ref, alt, gt, verdict, checks in non_pass:
             tag  = colourise(verdict, f"{sym(verdict)} {verdict}", use_colour)
             note = checks[-1][0] if checks else ""
             print(f"  {tag:<20}  {chrom}:{pos}  {ref}>{alt}  {gt}  [{note}]")
-
-
-def lv(results):
-    vs = [r[1] for r in results]
-    return "ERROR" if "ERROR" in vs else "WARN" if "WARN" in vs else "PASS"
 
 
 def print_summary(l1, l2, variants, use_colour):
@@ -291,16 +297,20 @@ def print_summary(l1, l2, variants, use_colour):
     warned  = sum(1 for v in variants if v[5] == "WARN")
     errored = sum(1 for v in variants if v[5] == "ERROR")
     lv3     = "ERROR" if errored else "WARN" if warned else "PASS"
-    all_lv  = ([lv(l1)] if l1 else []) + ([lv(l2)] if l2 else []) + ([lv3] if variants else [])
+    all_lv  = ([verdict_of(l1)] if l1 else []) + \
+              ([verdict_of(l2)] if l2 else []) + \
+              ([lv3] if variants else [])
     overall = "ERROR" if "ERROR" in all_lv else "WARN" if "WARN" in all_lv else "PASS"
 
     print(f"\n  {'─'*60}")
-    if l1:       print(f"  layer 1  {colourise(lv(l1), lv(l1), use_colour)}")
-    if l2:       print(f"  layer 2  {colourise(lv(l2), lv(l2), use_colour)}")
+    if l1:       print(f"  layer 1  {colourise(verdict_of(l1), verdict_of(l1), use_colour)}")
+    if l2:       print(f"  layer 2  {colourise(verdict_of(l2), verdict_of(l2), use_colour)}")
     if variants: print(f"  layer 3  {colourise(lv3, lv3, use_colour)}  "
                        f"({passed}/{total} pass, {warned} warn, {errored} error)")
     print(f"\n  overall  {colourise(overall, overall, use_colour)}\n")
 
+
+# ── entry point ───────────────────────────────────────────────────────────
 
 def main():
     p = argparse.ArgumentParser(description="Sequencing Evidence Validator")
