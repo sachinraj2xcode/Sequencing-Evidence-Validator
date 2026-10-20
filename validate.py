@@ -54,6 +54,13 @@ def verdict_of(checks):
     return "ERROR" if "ERROR" in vs else "WARN" if "WARN" in vs else "PASS"
 
 
+def abort_if_missing(*paths):
+    for f in paths:
+        if not os.path.exists(f):
+            print(f"file not found: {f}", file=sys.stderr)
+            sys.exit(1)
+
+
 # ── readers ───────────────────────────────────────────────────────────────
 
 def read_fastq(path):
@@ -223,9 +230,9 @@ def check_variant(chrom, pos, ref, alt, gt, reads):
                 ("VAF", "ERROR", f"{vaf:.3f} (min {MIN_VAF})")]
 
     checks = [
-        ("DEPTH",    "PASS", str(depth)),
-        ("ALT_COUNT","PASS", str(n_alt)),
-        ("VAF",      "PASS", f"{vaf:.3f}"),
+        ("DEPTH",     "PASS", str(depth)),
+        ("ALT_COUNT", "PASS", str(n_alt)),
+        ("VAF",       "PASS", f"{vaf:.3f}"),
     ]
 
     if gt in ("0/1", "1/0") and not refs:
@@ -260,7 +267,7 @@ def layer3(vcf, bam, region=None):
                 s, e = map(int, coords.split("-"))
                 if not (s <= pos <= e):
                     continue
-        checks  = check_variant(chrom, pos, ref, alt, gt, get_pileup(bam, chrom, pos))
+        checks = check_variant(chrom, pos, ref, alt, gt, get_pileup(bam, chrom, pos))
         variants.append((chrom, pos, ref, alt, gt, verdict_of(checks), checks))
     return variants
 
@@ -310,6 +317,46 @@ def print_summary(l1, l2, variants, use_colour):
     print(f"\n  overall  {colourise(overall, overall, use_colour)}\n")
 
 
+# ── command handlers ──────────────────────────────────────────────────────
+
+def cmd_fastq(args):
+    abort_if_missing(args.fastq)
+    l1 = layer1(args.fastq)
+    print_layer("fastq", l1, not args.no_color)
+    print_summary(l1, [], [], not args.no_color)
+
+
+def cmd_bam(args):
+    abort_if_missing(args.bam)
+    l2 = layer2(args.bam)
+    print_layer("bam", l2, not args.no_color)
+    print_summary([], l2, [], not args.no_color)
+
+
+def cmd_vcf(args):
+    abort_if_missing(args.vcf, args.bam)
+    variants = layer3(args.vcf, args.bam, region=args.region)
+    passed   = sum(1 for v in variants if v[5] == "PASS")
+    verdict  = verdict_of([(None, v[5], None) for v in variants]) if variants else "PASS"
+    print_layer("vcf", [("VARIANTS", verdict, f"{passed}/{len(variants)} pass")], not args.no_color)
+    print_variants(variants, args.verbose, not args.no_color)
+    print_summary([], [], variants, not args.no_color)
+
+
+def cmd_all(args):
+    abort_if_missing(args.fastq, args.bam, args.vcf)
+    l1 = layer1(args.fastq)
+    print_layer("fastq", l1, not args.no_color)
+    l2 = layer2(args.bam)
+    print_layer("bam", l2, not args.no_color)
+    variants = layer3(args.vcf, args.bam, region=args.region)
+    passed   = sum(1 for v in variants if v[5] == "PASS")
+    verdict  = verdict_of([(None, v[5], None) for v in variants]) if variants else "PASS"
+    print_layer("vcf", [("VARIANTS", verdict, f"{passed}/{len(variants)} pass")], not args.no_color)
+    print_variants(variants, args.verbose, not args.no_color)
+    print_summary(l1, l2, variants, not args.no_color)
+
+
 # ── entry point ───────────────────────────────────────────────────────────
 
 def main():
@@ -320,21 +367,29 @@ def main():
     s1 = sub.add_parser("fastq")
     s1.add_argument("fastq", metavar="FASTQ")
 
-    args = p.parse_args()
+    s2 = sub.add_parser("bam")
+    s2.add_argument("bam", metavar="BAM")
 
-    if args.cmd == "fastq":
-        if not os.path.exists(args.fastq):
-            print(f"file not found: {args.fastq}", file=sys.stderr)
-            sys.exit(1)
-        l1 = layer1(args.fastq)
-        print_layer("fastq", l1, not args.no_color)
-        print_summary(l1, [], [], not args.no_color)
+    s3 = sub.add_parser("vcf")
+    s3.add_argument("vcf",  metavar="VCF")
+    s3.add_argument("bam",  metavar="BAM")
+    s3.add_argument("--region",  metavar="CHR:START-END")
+    s3.add_argument("--verbose", action="store_true")
+
+    sa = sub.add_parser("all")
+    sa.add_argument("fastq", metavar="FASTQ")
+    sa.add_argument("bam",   metavar="BAM")
+    sa.add_argument("vcf",   metavar="VCF")
+    sa.add_argument("--region",  metavar="CHR:START-END")
+    sa.add_argument("--verbose", action="store_true")
+
+    args = p.parse_args()
+    {"fastq": cmd_fastq, "bam": cmd_bam, "vcf": cmd_vcf, "all": cmd_all}[args.cmd](args)
 
 
 if __name__ == "__main__":
     main()
 
 
-# command handlers and argument parsing
 # validator CLI execution flow
 # variant results graph
