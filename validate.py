@@ -224,6 +224,25 @@ def check_variant(chrom, pos, ref, alt, gt, reads):
     return checks
 
 
+def layer3(vcf, bam, region=None):
+    variants = []
+    for chrom, pos, ref, alt, gt in read_vcf(vcf):
+        if region:
+            rc, coords = (region.split(":") + [None])[:2]
+            if chrom != rc:
+                continue
+            if coords:
+                s, e = map(int, coords.split("-"))
+                if not (s <= pos <= e):
+                    continue
+        reads   = get_pileup(bam, chrom, pos)
+        checks  = check_variant(chrom, pos, ref, alt, gt, reads)
+        verdict = ("ERROR" if any(c[1] == "ERROR" for c in checks) else
+                   "WARN"  if any(c[1] == "WARN"  for c in checks) else "PASS")
+        variants.append((chrom, pos, ref, alt, gt, verdict, checks))
+    return variants
+
+
 def main():
     p = argparse.ArgumentParser(description="Sequencing Evidence Validator")
     p.add_argument("--no-color", action="store_true")
@@ -246,9 +265,8 @@ if __name__ == "__main__":
     main()
 
 
-# VCF layer validation
 # terminal verdict formatting
 # validation result reporting
-# variant results graph
 # command handlers and argument parsing
 # validator CLI execution flow
+# variant results graph
