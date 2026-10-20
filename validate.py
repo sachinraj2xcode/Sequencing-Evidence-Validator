@@ -380,8 +380,9 @@ def main():
     sa.add_argument("fastq", metavar="FASTQ")
     sa.add_argument("bam",   metavar="BAM")
     sa.add_argument("vcf",   metavar="VCF")
-    sa.add_argument("--region",  metavar="CHR:START-END")
-    sa.add_argument("--verbose", action="store_true")
+    sa.add_argument("--region",   metavar="CHR:START-END")
+    sa.add_argument("--verbose",  action="store_true")
+    sa.add_argument("--plot-out", default="results_graph.png", metavar="FILE")
 
     args = p.parse_args()
     {"fastq": cmd_fastq, "bam": cmd_bam, "vcf": cmd_vcf, "all": cmd_all}[args.cmd](args)
@@ -391,5 +392,4 @@ if __name__ == "__main__":
     main()
 
 
-# validator CLI execution flow
 # variant results graph
