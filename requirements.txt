@@ -1,3 +1,6 @@
-pysam>=0.24.0
-matplotlib>=3.7.0
-numpy>=1.24.0
+# Optional: faster, more accurate pileups (falls back to `samtools mpileup`)
+pysam>=0.21
+
+# Optional: only needed for the results graph (`validate.py all`)
+matplotlib>=3.4
+numpy>=1.21
